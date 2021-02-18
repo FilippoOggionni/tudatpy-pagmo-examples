@@ -215,18 +215,17 @@ def get_dependent_variables_to_save( ):
     return dependent_variables_to_save
 
 
-global_bodies = None
 global_integrator_settings = None
 global_propagator_settings = None
-global_dynamics_simulator = None
 
 class AsteroidOrbitProblem:
     def __init__(self,
                  bodies,
                  integrator_settings,
                  propagator_settings):
-        global global_bodies, global_integrator_settings, global_propagator_settings
-        global_bodies = bodies
+        global global_integrator_settings, global_propagator_settings
+        self.bodies_function = lambda: bodies
+        self.dynamics_simulator_function = lambda: None
         global_integrator_settings = integrator_settings
         global_propagator_settings = propagator_settings
 
@@ -239,9 +238,9 @@ class AsteroidOrbitProblem:
 
     def fitness(self,
                 orbit_parameters: list) -> float:
-        global global_bodies, global_integrator_settings, global_propagator_settings, global_dynamics_simulator
-
-        itokawa_gravitational_parameter = global_bodies.get_body("Itokawa").gravitational_parameter
+        global global_integrator_settings, global_propagator_settings
+        current_bodies = self.bodies_function( )
+        itokawa_gravitational_parameter = current_bodies.get_body("Itokawa").gravitational_parameter
         new_initial_state = conversion.keplerian_to_cartesian(
             gravitational_parameter=itokawa_gravitational_parameter,
             semi_major_axis=orbit_parameters[ 0 ],
@@ -252,9 +251,11 @@ class AsteroidOrbitProblem:
             true_anomaly=np.deg2rad(139.87) )
         global_propagator_settings.reset_initial_states(new_initial_state)
 
-        global_dynamics_simulator = propagation_setup.SingleArcDynamicsSimulator(
-            global_bodies, global_integrator_settings, global_propagator_settings)
-        dependent_variables = global_dynamics_simulator.dependent_variable_history
+        dynamics_simulator = propagation_setup.SingleArcDynamicsSimulator(
+            current_bodies, global_integrator_settings, global_propagator_settings)
+        self.dynamics_simulator_function = lambda: dynamics_simulator
+
+        dependent_variables = dynamics_simulator.dependent_variable_history
         dependent_variables_list = np.vstack( list( dependent_variables.values( ) ) )
         distance = dependent_variables_list[:, 0]
         latitudes = dependent_variables_list[:, 2]
@@ -271,7 +272,7 @@ class AsteroidOrbitProblem:
 
     def get_last_run_dynamics_simulator(self):
 
-        return self.dynamics_simulator
+        return self.dynamics_simulator_function()
 
 
 def main():
@@ -333,12 +334,14 @@ def main():
     prob = problem(orbitProblem)
     pop = population(prob, size=50)
 
-    for i in range(50):
+    for i in range(1):
         pop = algo.evolve(pop)
         print('Current iteration')
         print(i)
         print(pop.get_f())
 
+    dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator( )
+    print(dynamics_simulator.dependent_variable_history)
     problem_bounds = orbitProblem.get_bounds()
     # print(problem_bounds)
     # np.random.seed(0)
