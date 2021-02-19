@@ -215,19 +215,17 @@ def get_dependent_variables_to_save( ):
     return dependent_variables_to_save
 
 
-global_integrator_settings = None
-global_propagator_settings = None
 
 class AsteroidOrbitProblem:
     def __init__(self,
                  bodies,
                  integrator_settings,
                  propagator_settings):
-        global global_integrator_settings, global_propagator_settings
+
         self.bodies_function = lambda: bodies
         self.dynamics_simulator_function = lambda: None
-        global_integrator_settings = integrator_settings
-        global_propagator_settings = propagator_settings
+        self.integrator_settings_function = lambda: integrator_settings
+        self.propagator_settings_function = lambda: propagator_settings
 
     def get_bounds(self):
         """ Define the search space """
@@ -238,7 +236,6 @@ class AsteroidOrbitProblem:
 
     def fitness(self,
                 orbit_parameters: list) -> float:
-        global global_integrator_settings, global_propagator_settings
         current_bodies = self.bodies_function( )
         itokawa_gravitational_parameter = current_bodies.get_body("Itokawa").gravitational_parameter
         new_initial_state = conversion.keplerian_to_cartesian(
@@ -249,10 +246,13 @@ class AsteroidOrbitProblem:
             argument_of_periapsis=np.deg2rad(235.7),
             longitude_of_ascending_node=np.deg2rad(orbit_parameters[ 3 ]),
             true_anomaly=np.deg2rad(139.87) )
-        global_propagator_settings.reset_initial_states(new_initial_state)
+        propagator_settings = self.propagator_settings_function()
+        integrator_settings = self.integrator_settings_function()
+
+        propagator_settings.reset_initial_states(new_initial_state)
 
         dynamics_simulator = propagation_setup.SingleArcDynamicsSimulator(
-            current_bodies, global_integrator_settings, global_propagator_settings)
+            current_bodies, integrator_settings, propagator_settings)
         self.dynamics_simulator_function = lambda: dynamics_simulator
 
         dependent_variables = dynamics_simulator.dependent_variable_history
@@ -339,8 +339,12 @@ def main():
         print('Current iteration')
         print(i)
         print(pop.get_f())
+    print('Get entry')
+    print(pop.get_x()[0])
+    orbitProblem.fitness(pop.get_x()[0])
 
     dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator( )
+    print('Print dependent variables')
     print(dynamics_simulator.dependent_variable_history)
     problem_bounds = orbitProblem.get_bounds()
     # print(problem_bounds)
