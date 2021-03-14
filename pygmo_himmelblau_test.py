@@ -160,10 +160,12 @@ def main():
     """
     # Define number of generations
     number_of_generations = 1
+    # Fix seed
+    current_seed = 171015
     # Create Differential Evolution object by passing the number of generations as input
     # NOTE: specific inputs for different pygmo algorithms may vary, check each algorithm's documentation
     # See also https://esa.github.io/pygmo2/overview.html#list-of-algorithms
-    de_algo = pygmo.de(gen=number_of_generations)
+    de_algo = pygmo.de(gen=number_of_generations, seed=current_seed)
     # Create pygmo algorithm object
     algo = pygmo.algorithm(de_algo)
     # Print the algorithm's information
@@ -182,8 +184,10 @@ def main():
     """
     # Set population size
     pop_size = 1000
+    # Set seed
+    current_seed = 171015
     # Create population
-    pop = pygmo.population(prob, size=pop_size)
+    pop = pygmo.population(prob, size=pop_size, seed=current_seed)
     # Inspect population (this is going to be long, uncomment if desired)
     # print('\n########### PRINTING POPULATION INFORMATION ###########\n')
     # print(pop)
