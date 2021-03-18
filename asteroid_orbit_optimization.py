@@ -30,8 +30,9 @@ PyGMO is the Python counterpart of PAGMO: https://esa.github.io/pagmo2/index.htm
 
 # General imports
 import numpy as np
-import os
+from matplotlib import pyplot as plt
 from typing import List, Dict, Tuple
+import os
 
 # Pygmo import
 import pygmo as pg
@@ -277,8 +278,7 @@ def get_acceleration_models(bodies_to_propagate: List[str],
     Creates the acceleration models for the simulation.
 
     The accelerations acting on the Spacecraft currently considered are the spherical harmonic gravity of Itokawa,
-    the point mass gravity of the Sun, Jupiter, Saturn, and the solar radiation pressure. The point mass gravity
-    accelerations of Mars and the Earth are currently excluded.
+    the point mass gravity of the Sun, Jupiter, Saturn, Mars, the Earth, and the solar radiation pressure.
 
     Parameters
     ----------
@@ -312,15 +312,15 @@ def get_acceleration_models(bodies_to_propagate: List[str],
         Saturn=
         [
             propagation_setup.acceleration.point_mass_gravity()
+        ],
+        Mars=
+        [
+            propagation_setup.acceleration.point_mass_gravity()
+        ],
+        Earth=
+        [
+            propagation_setup.acceleration.point_mass_gravity()
         ]
-        # Mars=
-        # [
-        #     propagation_setup.acceleration.point_mass_gravity()
-        # ],
-        # Earth=
-        # [
-        #     propagation_setup.acceleration.point_mass_gravity()
-        # ]
     )
 
     # Create global accelerations settings dictionary
@@ -413,6 +413,7 @@ def get_dependent_variables_to_save():
     ]
     return dependent_variables_to_save
 
+
 ###########################################################################
 # CREATE PYGMO-COMPATIBLE USER-DEFINED PROBLEM CLASS ######################
 ###########################################################################
@@ -428,6 +429,7 @@ class AsteroidOrbitProblem:
     Methods
     -------
     """
+
     def __init__(self,
                  bodies: tudatpy.kernel.simulation.environment_setup.SystemOfBodies,
                  integrator_settings,
@@ -514,8 +516,10 @@ class AsteroidOrbitProblem:
         propagator_settings.reset_initial_states(new_initial_state)
 
         # Propagate orbit
-        dynamics_simulator = propagation_setup.SingleArcDynamicsSimulator(
-            current_bodies, integrator_settings, propagator_settings)
+        dynamics_simulator = propagation_setup.SingleArcDynamicsSimulator(current_bodies,
+                                                                          integrator_settings,
+                                                                          propagator_settings,
+                                                                          print_dependent_variable_data=False)
         # Update dynamics simulator function
         self.dynamics_simulator_function = lambda: dynamics_simulator
 
@@ -631,62 +635,71 @@ def main():
     )
 
     ###########################################################################
-    # OPTIMIZE ORBIT ##########################################################
+    # OPTIMIZE ORBIT WITH PYGMO ###############################################
     ###########################################################################
 
     # Instantiate orbit problem
-    orbit_problem = AsteroidOrbitProblem(bodies,
-                                         integrator_settings,
-                                         propagator_settings,
-                                         altitude_boundaries)
+    orbitProblem = AsteroidOrbitProblem(bodies,
+                                        integrator_settings,
+                                        propagator_settings,
+                                        altitude_boundaries)
 
     # Select Moead algorithm from pygmo, with one generation
     algo = pg.algorithm(pg.moead(gen=1))
     # Create pygmo problem using the UDP instantiated above
-    prob = pg.problem(orbit_problem)
+    prob = pg.problem(orbitProblem)
     # Initialize pygmo population with 50 individuals
     pop = pg.population(prob, size=50)
+    # Set the number of evolutions
+    number_of_evolutions = 50
     # Evolve the population recursively
-    # TODO Filippo: continue here
-    for i in range(1):
+    fitness_list = []
+    fig, ax = plt.subplots(figsize=(16, 8))
+    for i in range(number_of_evolutions):
+        # Evolve the population
         pop = algo.evolve(pop)
-        print('Current iteration')
-        print(i)
-        print(pop.get_f())
+        # Store the fitness values for all individuals in a list
+        fitness_list.append(pop.get_f)
+    # This is necessary for pickle
+    # TODO Dominic: if desired, elaborate here
     print('Get entry')
     print(pop.get_x()[0])
-    orbit_problem.fitness(pop.get_x()[0])
-
-    dynamics_simulator = orbit_problem.get_last_run_dynamics_simulator()
+    orbitProblem.fitness(pop.get_x()[0])
+    dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator()
     print('Print dependent variables')
     print(dynamics_simulator.dependent_variable_history)
-    problem_bounds = orbit_problem.get_bounds()
-    # print(problem_bounds)
-    # np.random.seed(0)
-    # counter = 1
-    # for iteration in range( 1000 ):
-    #     semi_major_axis = np.random.uniform(problem_bounds[0][0],problem_bounds[1][0])
-    #     eccentricity = np.random.uniform(problem_bounds[0][2],problem_bounds[1][1])
-    #     inclination = np.random.uniform(problem_bounds[0][2],problem_bounds[1][2])
-    #     node = np.random.uniform(problem_bounds[0][3],problem_bounds[1][3])
-    #
-    #     current_fitness = orbitProblem.fitness( [semi_major_axis,eccentricity,inclination,node])
-    #     # Create simulation object and propagate dynamics.
-    #     if( current_fitness < 1.0E4 ):
-    #         dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator( )
-    #         states = dynamics_simulator.state_history
-    #         dependent_variables = dynamics_simulator.dependent_variable_history
-    #
-    #         current_dir = '/home/dominic/Software/Tudat30Bundle/build-tudat-bundle-Desktop-Default/tudatpy/'
-    #         save2txt(dependent_variables, 'dependent_variables'+str(counter)+'.dat', current_dir)
-    #         save2txt(states, 'states'+str(counter)+'.dat', current_dir)
-    #         counter = counter + 1
-    #         print(current_fitness)
-    #
-    #     #print(dependent_variables)
-    #     # Final statement (not required, though good practice in a __main__).
-    # return 0
 
+    ###########################################################################
+    # MONTE-CARLO SEARCH ######################################################
+    ###########################################################################
+
+    # Retrieve lower and upper boundaries of the problem
+    problem_bounds = orbitProblem.get_bounds()
+    # Fix seed for reproducibility
+    np.random.seed(0)
+    # Initialize counter
+    counter = 1
+    # Perform a Monte-Carlo search
+    for iteration in range(1000):
+        # Generate random values for the design variables
+        semi_major_axis = np.random.uniform(problem_bounds[0][0], problem_bounds[1][0])
+        eccentricity = np.random.uniform(problem_bounds[0][2], problem_bounds[1][1])
+        inclination = np.random.uniform(problem_bounds[0][2], problem_bounds[1][2])
+        node = np.random.uniform(problem_bounds[0][3], problem_bounds[1][3])
+        # Compute fitness and propagate orbit
+        current_fitness = orbitProblem.fitness([semi_major_axis, eccentricity, inclination, node])
+        # If the propagation does not stop prematurely, extract and save data
+        if np.max(current_fitness) < 1.0E4:
+            # Retrieves state and dependent variable history
+            dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator()
+            states = dynamics_simulator.state_history
+            dependent_variables = dynamics_simulator.dependent_variable_history
+            
+            # Saves data to the ./SimulationOutput
+            output_path = os.path.dirname(__file__) + '/SimulationOutput'
+            save2txt(dependent_variables, 'dependent_variables' + str(counter) + '.dat', output_path)
+            save2txt(states, 'states' + str(counter) + '.dat', output_path)
+            counter += 1
 
 if __name__ == "__main__":
     main()
