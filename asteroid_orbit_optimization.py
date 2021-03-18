@@ -404,9 +404,6 @@ def get_dependent_variables_to_save():
     List[tudatpy.kernel.simulation.propagation_setup.dependent_variable.tp::SingleDependentVariableSaveSettings
     """
     dependent_variables_to_save = [
-        propagation_setup.dependent_variable.relative_distance(
-            "Spacecraft", "Itokawa"
-        ),
         propagation_setup.dependent_variable.central_body_fixed_spherical_position(
             "Spacecraft", "Itokawa"
         )
@@ -434,7 +431,7 @@ class AsteroidOrbitProblem:
                  bodies: tudatpy.kernel.simulation.environment_setup.SystemOfBodies,
                  integrator_settings,
                  propagator_settings,
-                 distance_boundaries: Tuple[float]):
+                 mission_duration):
         """
         Constructor for the AsteroidOrbitProblem class.
 
@@ -456,7 +453,7 @@ class AsteroidOrbitProblem:
         # Initialize empty dynamics simulator
         self.dynamics_simulator_function = lambda: None
         # Set other input arguments as regular attributes
-        self.distance_boundaries = distance_boundaries
+        self.mission_duration = mission_duration
 
     def get_bounds(self) -> Tuple[List[float], List[float]]:
         """
@@ -472,7 +469,7 @@ class AsteroidOrbitProblem:
             Two lists of size n (for this problem, n=4), defining respectively the lower and upper
             boundaries of each variable.
         """
-        return ([200, 0.0, 0.0, 0.0], [2000, 0.3, 180, 360])
+        return ([300, 0.0, 0.0, 0.0], [2000, 0.3, 180, 360])
 
     def get_nobj(self) -> int:
         """
@@ -529,19 +526,18 @@ class AsteroidOrbitProblem:
         # Retrieve distance
         distance = dependent_variables_list[:, 0]
         # Retrieve latitude
-        latitudes = dependent_variables_list[:, 2]
+        latitudes = dependent_variables_list[:, 1]
         # Compute mean latitude
         mean_latitude = np.mean(np.absolute(latitudes))
         # Computes fitness as mean latitude
         current_fitness = 1.0 / mean_latitude
 
         # Exaggerate fitness value if the spacecraft has broken out of the selected distance range
-        if (np.min(distance) < self.distance_boundaries[0]):
-            current_fitness += 1.0E4
-        if (np.max(distance) > self.distance_boundaries[1]):
-            current_fitness += 1.0E4
+        current_penalty = 0.0
+        if (max(dynamics_simulator.dependent_variable_history.keys( ))<self.mission_duration):
+            current_penalty += 1.0E4
 
-        return [current_fitness, np.mean(distance)]
+        return [current_fitness + current_penalty, np.mean(distance) + current_penalty * 1.0E3]
 
     def get_last_run_dynamics_simulator(self):
         """
@@ -591,9 +587,8 @@ def main():
     mission_duration = 5.0 * 86400.0
 
     # Set termination conditions
-    minimum_altitude = 150.0
+    minimum_altitude = 150.0 + itokawa_radius
     maximum_altitude = 5.0E3
-    altitude_boundaries = (minimum_altitude, maximum_altitude)
 
     # Create simulation bodies
     bodies = create_simulation_bodies(itokawa_radius)
@@ -642,64 +637,95 @@ def main():
     orbitProblem = AsteroidOrbitProblem(bodies,
                                         integrator_settings,
                                         propagator_settings,
-                                        altitude_boundaries)
+                                        mission_duration)
 
     # Select Moead algorithm from pygmo, with one generation
-    algo = pg.algorithm(pg.moead(gen=1))
+    algo = pg.algorithm(pg.nsga2(gen=1))
     # Create pygmo problem using the UDP instantiated above
     prob = pg.problem(orbitProblem)
     # Initialize pygmo population with 50 individuals
-    pop = pg.population(prob, size=50)
+    population_size = 48
+    pop = pg.population(prob, size=population_size)
     # Set the number of evolutions
     number_of_evolutions = 50
     # Evolve the population recursively
     fitness_list = []
+    population_list = []
+
+    fitness_list.append(pop.get_f())
+    population_list.append(pop.get_x())
+
     fig, ax = plt.subplots(figsize=(16, 8))
     for i in range(number_of_evolutions):
         # Evolve the population
         pop = algo.evolve(pop)
         # Store the fitness values for all individuals in a list
-        fitness_list.append(pop.get_f)
+        fitness_list.append(pop.get_f())
+        population_list.append(pop.get_x())
+        print('Evolving population; at generation ' + str(i))
     # This is necessary for pickle
     # TODO Dominic: if desired, elaborate here
-    print('Get entry')
-    print(pop.get_x()[0])
-    orbitProblem.fitness(pop.get_x()[0])
-    dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator()
-    print('Print dependent variables')
-    print(dynamics_simulator.dependent_variable_history)
+    np.savetxt('Fitness_0.dat',fitness_list[0])
+    np.savetxt('Fitness_final.dat',fitness_list[-1])
 
-    ###########################################################################
-    # MONTE-CARLO SEARCH ######################################################
-    ###########################################################################
+    np.savetxt('Population_0.dat',population_list[0])
+    np.savetxt('Population_final.dat',population_list[-1])
 
-    # Retrieve lower and upper boundaries of the problem
-    problem_bounds = orbitProblem.get_bounds()
-    # Fix seed for reproducibility
-    np.random.seed(0)
-    # Initialize counter
-    counter = 1
-    # Perform a Monte-Carlo search
-    for iteration in range(1000):
-        # Generate random values for the design variables
-        semi_major_axis = np.random.uniform(problem_bounds[0][0], problem_bounds[1][0])
-        eccentricity = np.random.uniform(problem_bounds[0][2], problem_bounds[1][1])
-        inclination = np.random.uniform(problem_bounds[0][2], problem_bounds[1][2])
-        node = np.random.uniform(problem_bounds[0][3], problem_bounds[1][3])
-        # Compute fitness and propagate orbit
-        current_fitness = orbitProblem.fitness([semi_major_axis, eccentricity, inclination, node])
-        # If the propagation does not stop prematurely, extract and save data
-        if np.max(current_fitness) < 1.0E4:
-            # Retrieves state and dependent variable history
-            dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator()
-            states = dynamics_simulator.state_history
-            dependent_variables = dynamics_simulator.dependent_variable_history
-            
-            # Saves data to the ./SimulationOutput
-            output_path = os.path.dirname(__file__) + '/SimulationOutput'
-            save2txt(dependent_variables, 'dependent_variables' + str(counter) + '.dat', output_path)
-            save2txt(states, 'states' + str(counter) + '.dat', output_path)
-            counter += 1
+    initial_population = population_list[0]
+    final_population = population_list[-1]
+
+    output_path = '/home/dominic/Software/TudatPygmoExamples/'
+    for i in range(population_size):
+        current_orbit_parameters = final_population[i]
+        orbitProblem.fitness(current_orbit_parameters)
+        current_states = orbitProblem.get_last_run_dynamics_simulator().state_history
+        current_dependent_variables = orbitProblem.get_last_run_dynamics_simulator().dependent_variable_history
+        save2txt(current_dependent_variables, 'final_dependent_variables' + str(i) + '.dat', output_path)
+        save2txt(current_states, 'final_states' + str(i) + '.dat', output_path)
+
+        current_orbit_parameters = initial_population[i]
+        orbitProblem.fitness(current_orbit_parameters)
+        current_states = orbitProblem.get_last_run_dynamics_simulator().state_history
+        current_dependent_variables = orbitProblem.get_last_run_dynamics_simulator().dependent_variable_history
+        save2txt(current_dependent_variables, 'initial_dependent_variables' + str(i) + '.dat', output_path)
+        save2txt(current_states, 'initial_states' + str(i) + '.dat', output_path)
+
+    # orbitProblem.fitness(fitness_list[-1])
+    # dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator()
+    # print('Print dependent variables')
+    # print(dynamics_simulator.dependent_variable_history)
+
+    # ###########################################################################
+    # # MONTE-CARLO SEARCH ######################################################
+    # ###########################################################################
+    #
+    # # Retrieve lower and upper boundaries of the problem
+    # problem_bounds = orbitProblem.get_bounds()
+    # # Fix seed for reproducibility
+    # np.random.seed(0)
+    # # Initialize counter
+    # counter = 1
+    # # Perform a Monte-Carlo search
+    # for iteration in range(1000):
+    #     # Generate random values for the design variables
+    #     semi_major_axis = np.random.uniform(problem_bounds[0][0], problem_bounds[1][0])
+    #     eccentricity = np.random.uniform(problem_bounds[0][2], problem_bounds[1][1])
+    #     inclination = np.random.uniform(problem_bounds[0][2], problem_bounds[1][2])
+    #     node = np.random.uniform(problem_bounds[0][3], problem_bounds[1][3])
+    #     # Compute fitness and propagate orbit
+    #     current_fitness = orbitProblem.fitness([semi_major_axis, eccentricity, inclination, node])
+    #     # If the propagation does not stop prematurely, extract and save data
+    #     if np.max(current_fitness) < 1.0E4:
+    #         # Retrieves state and dependent variable history
+    #         dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator()
+    #         states = dynamics_simulator.state_history
+    #         dependent_variables = dynamics_simulator.dependent_variable_history
+    #
+    #         # Saves data to the ./SimulationOutput
+    #         output_path = os.path.dirname(__file__) + '/SimulationOutput'
+    #         save2txt(dependent_variables, 'dependent_variables' + str(counter) + '.dat', output_path)
+    #         save2txt(states, 'states' + str(counter) + '.dat', output_path)
+    #         counter += 1
 
 if __name__ == "__main__":
     main()
