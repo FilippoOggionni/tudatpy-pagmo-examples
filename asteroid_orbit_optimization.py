@@ -245,8 +245,8 @@ def create_simulation_bodies(itokawa_radius: float) -> tudatpy.kernel.simulation
     # Ephemeris
     body_settings.get("Itokawa").ephemeris_settings = get_itokawa_ephemeris_settings(
         itokawa_gravity_field_settings.gravitational_parameter)
-    # Shape (spherical), making sure that the reference radius is slightly larger than the Spherical Harmonics's radius
-    body_settings.get("Itokawa").shape_settings = get_itokawa_shape_settings(itokawa_radius + 0.1)
+    # Shape (spherical)
+    body_settings.get("Itokawa").shape_settings = get_itokawa_shape_settings(itokawa_radius)
     # Create system of selected bodies
     bodies = environment_setup.create_system_of_bodies(body_settings)
 
@@ -336,9 +336,8 @@ def get_acceleration_models(bodies_to_propagate: List[str],
 
 def get_termination_settings(mission_initial_time: float,
                              mission_duration: float,
-                             minimum_altitude: float,
-                             maximum_altitude: float,
-                             itokawa_radius: float):
+                             minimum_distance_from_com: float,
+                             maximum_distance_from_com: float):
     """
     Defines the termination settings for the simulation.
 
@@ -351,10 +350,10 @@ def get_termination_settings(mission_initial_time: float,
         Initial time from the reference epoch when initial kepler elements are defined.
     mission_duration : float
         Length of the simulation.
-    minimum_altitude : float
-        Minimum altitude with respect to Itokawa's surface.
-    maximum_altitude : float
-        Maximum altitude with respect to Itokawa's surface.
+    minimum_distance_from_com : float
+        Minimum distance Itokawa's center of mass.
+    maximum_distance_from_com : float
+        Maximum distance Itokawa's center of mass.
 
     Returns
     -------
@@ -368,13 +367,13 @@ def get_termination_settings(mission_initial_time: float,
     # Altitude
     upper_altitude_termination_settings = propagation_setup.propagator.dependent_variable_termination(
         dependent_variable_settings=propagation_setup.dependent_variable.relative_distance('Spacecraft', 'Itokawa'),
-        limit_value=maximum_altitude + itokawa_radius,
+        limit_value=maximum_distance_from_com,
         use_as_lower_limit=False,
         terminate_exactly_on_final_condition=False
     )
     lower_altitude_termination_settings = propagation_setup.propagator.dependent_variable_termination(
-        dependent_variable_settings=propagation_setup.dependent_variable.relative_distance('Spacecraft', 'Itokawa'),
-        limit_value=minimum_altitude + itokawa_radius,
+        dependent_variable_settings=propagation_setup.dependent_variable.altitude('Spacecraft', 'Itokawa'),
+        limit_value=minimum_distance_from_com,
         use_as_lower_limit=True,
         terminate_exactly_on_final_condition=False
     )
@@ -417,7 +416,7 @@ def get_dependent_variables_to_save():
 
 class AsteroidOrbitProblem:
     """
-    This class creates a PyGMO-compatbile User Defined Problem (UDP).
+    This class creates a PyGMO-compatible User Defined Problem (UDP).
 
     Attributes
     ----------
@@ -431,7 +430,10 @@ class AsteroidOrbitProblem:
                  bodies: tudatpy.kernel.simulation.environment_setup.SystemOfBodies,
                  integrator_settings,
                  propagator_settings,
-                 mission_duration):
+                 mission_initial_time: float,
+                 mission_duration: float,
+                 design_variable_lower_boundaries: Tuple[float],
+                 design_variable_upper_boundaries: Tuple[float]):
         """
         Constructor for the AsteroidOrbitProblem class.
 
@@ -453,7 +455,11 @@ class AsteroidOrbitProblem:
         # Initialize empty dynamics simulator
         self.dynamics_simulator_function = lambda: None
         # Set other input arguments as regular attributes
+        self.mission_initial_time = mission_initial_time
         self.mission_duration = mission_duration
+        self.mission_final_time = mission_initial_time + mission_duration
+        self.design_variable_lower_boundaries = design_variable_lower_boundaries
+        self.design_variable_upper_boundaries = design_variable_upper_boundaries
 
     def get_bounds(self) -> Tuple[List[float], List[float]]:
         """
@@ -469,7 +475,7 @@ class AsteroidOrbitProblem:
             Two lists of size n (for this problem, n=4), defining respectively the lower and upper
             boundaries of each variable.
         """
-        return ([300, 0.0, 0.0, 0.0], [2000, 0.3, 180, 360])
+        return (list(self.design_variable_lower_boundaries), list(self.design_variable_upper_boundaries))
 
     def get_nobj(self) -> int:
         """
@@ -534,7 +540,7 @@ class AsteroidOrbitProblem:
 
         # Exaggerate fitness value if the spacecraft has broken out of the selected distance range
         current_penalty = 0.0
-        if (max(dynamics_simulator.dependent_variable_history.keys( ))<self.mission_duration):
+        if (max(dynamics_simulator.dependent_variable_history.keys()) < self.mission_final_time):
             current_penalty += 1.0E4
 
         return [current_fitness + current_penalty, np.mean(distance) + current_penalty * 1.0E3]
@@ -586,9 +592,13 @@ def main():
     mission_initial_time = 0.0
     mission_duration = 5.0 * 86400.0
 
+    # Set boundaries on the design variables
+    design_variable_lb = (300, 0.0, 0.0, 0.0)
+    design_variable_ub = (2000, 0.3, 180, 360)
+
     # Set termination conditions
-    minimum_altitude = 150.0 + itokawa_radius
-    maximum_altitude = 5.0E3
+    minimum_distance_from_com = 150.0 + itokawa_radius
+    maximum_distance_from_com = 5.0E3 + itokawa_radius
 
     # Create simulation bodies
     bodies = create_simulation_bodies(itokawa_radius)
@@ -617,7 +627,7 @@ def main():
 
     # Create propagation settings
     termination_settings = get_termination_settings(
-        mission_initial_time, mission_duration, minimum_altitude, maximum_altitude, itokawa_radius)
+        mission_initial_time, mission_duration, minimum_distance_from_com, maximum_distance_from_com)
 
     # Define (Cowell) propagator settings with mock initial state
     propagator_settings = propagation_setup.propagator.translational(
@@ -637,63 +647,72 @@ def main():
     orbitProblem = AsteroidOrbitProblem(bodies,
                                         integrator_settings,
                                         propagator_settings,
-                                        mission_duration)
+                                        mission_initial_time,
+                                        mission_duration,
+                                        design_variable_lb,
+                                        design_variable_ub)
 
     # Select Moead algorithm from pygmo, with one generation
     algo = pg.algorithm(pg.nsga2(gen=1))
     # Create pygmo problem using the UDP instantiated above
     prob = pg.problem(orbitProblem)
-    # Initialize pygmo population with 50 individuals
+    # Initialize pygmo population with 48 individuals
     population_size = 48
     pop = pg.population(prob, size=population_size)
     # Set the number of evolutions
-    number_of_evolutions = 50
-    # Evolve the population recursively
+    number_of_evolutions = 5
+    # Initialize containers
     fitness_list = []
     population_list = []
-
-    fitness_list.append(pop.get_f())
-    population_list.append(pop.get_x())
-
-    fig, ax = plt.subplots(figsize=(16, 8))
+    # Evolve the population recursively
     for i in range(number_of_evolutions):
+        print('Evolving population; at generation ' + str(i))
         # Evolve the population
         pop = algo.evolve(pop)
-        # Store the fitness values for all individuals in a list
+        # Store the fitness values and design variables for all individuals
         fitness_list.append(pop.get_f())
         population_list.append(pop.get_x())
-        print('Evolving population; at generation ' + str(i))
-    # This is necessary for pickle
-    # TODO Dominic: if desired, elaborate here
-    np.savetxt('Fitness_0.dat',fitness_list[0])
-    np.savetxt('Fitness_final.dat',fitness_list[-1])
 
-    np.savetxt('Population_0.dat',population_list[0])
-    np.savetxt('Population_final.dat',population_list[-1])
+    ###########################################################################
+    # ANALYZE FIRST AND LAST GENERATIONS ######################################
+    ###########################################################################
 
+    # Get output path
+    output_path = os.getcwd() + '/PygmoExampleSimulationOutput/'
+
+    # Retrieve first and last generations for further analysis
     initial_population = population_list[0]
     final_population = population_list[-1]
-
-    output_path = '/home/dominic/Software/TudatPygmoExamples/'
+    # Loop over all individuals of the populations
     for i in range(population_size):
+        # Retrieve orbital parameters
         current_orbit_parameters = final_population[i]
+        # Propagate orbit and compute fitness
         orbitProblem.fitness(current_orbit_parameters)
+        # Retrieve state and dependent variable history
         current_states = orbitProblem.get_last_run_dynamics_simulator().state_history
         current_dependent_variables = orbitProblem.get_last_run_dynamics_simulator().dependent_variable_history
+        # Write data to files
         save2txt(current_dependent_variables, 'final_dependent_variables' + str(i) + '.dat', output_path)
         save2txt(current_states, 'final_states' + str(i) + '.dat', output_path)
 
+        # Retrieve orbital parameters
         current_orbit_parameters = initial_population[i]
+        # Propagate orbit and compute fitness
         orbitProblem.fitness(current_orbit_parameters)
+        # Retrieve state and dependent variable history
         current_states = orbitProblem.get_last_run_dynamics_simulator().state_history
         current_dependent_variables = orbitProblem.get_last_run_dynamics_simulator().dependent_variable_history
+        # Write data to files
         save2txt(current_dependent_variables, 'initial_dependent_variables' + str(i) + '.dat', output_path)
         save2txt(current_states, 'initial_states' + str(i) + '.dat', output_path)
 
-    # orbitProblem.fitness(fitness_list[-1])
-    # dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator()
-    # print('Print dependent variables')
-    # print(dynamics_simulator.dependent_variable_history)
+    # Save first generation data
+    np.savetxt(output_path + 'Fitness_0.dat', fitness_list[0])
+    np.savetxt(output_path + 'Population_0.dat', population_list[0])
+    # Save last generation data
+    np.savetxt(output_path + 'Fitness_final.dat', fitness_list[-1])
+    np.savetxt(output_path + 'Population_final.dat', population_list[-1])
 
     # ###########################################################################
     # # MONTE-CARLO SEARCH ######################################################
@@ -726,6 +745,7 @@ def main():
     #         save2txt(dependent_variables, 'dependent_variables' + str(counter) + '.dat', output_path)
     #         save2txt(states, 'states' + str(counter) + '.dat', output_path)
     #         counter += 1
+
 
 if __name__ == "__main__":
     main()
