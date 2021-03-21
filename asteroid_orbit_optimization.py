@@ -30,6 +30,7 @@ PyGMO is the Python counterpart of PAGMO: https://esa.github.io/pagmo2/index.htm
 
 # General imports
 import numpy as np
+import matplotlib
 from matplotlib import pyplot as plt
 from typing import List, Dict, Tuple
 import os
@@ -660,13 +661,13 @@ def main():
     population_size = 48
     pop = pg.population(prob, size=population_size)
     # Set the number of evolutions
-    number_of_evolutions = 5
+    number_of_evolutions = 50
     # Initialize containers
     fitness_list = []
     population_list = []
     # Evolve the population recursively
-    for i in range(number_of_evolutions):
-        print('Evolving population; at generation ' + str(i))
+    for gen in range(number_of_evolutions):
+        print('Evolving population; at generation ' + str(gen))
         # Evolve the population
         pop = algo.evolve(pop)
         # Store the fitness values and design variables for all individuals
@@ -681,70 +682,171 @@ def main():
     output_path = os.getcwd() + '/PygmoExampleSimulationOutput/'
 
     # Retrieve first and last generations for further analysis
-    initial_population = population_list[0]
-    final_population = population_list[-1]
-    # Loop over all individuals of the populations
-    for i in range(population_size):
-        # Retrieve orbital parameters
-        current_orbit_parameters = final_population[i]
-        # Propagate orbit and compute fitness
-        orbitProblem.fitness(current_orbit_parameters)
-        # Retrieve state and dependent variable history
-        current_states = orbitProblem.get_last_run_dynamics_simulator().state_history
-        current_dependent_variables = orbitProblem.get_last_run_dynamics_simulator().dependent_variable_history
-        # Write data to files
-        save2txt(current_dependent_variables, 'final_dependent_variables' + str(i) + '.dat', output_path)
-        save2txt(current_states, 'final_states' + str(i) + '.dat', output_path)
+    pops_to_analyze = {0: 'initial',
+                       number_of_evolutions - 1: 'final'}
+    # Initialize containers
+    simulation_output = dict()
+    # Loop over first and last generations
+    for population_index, population_name in pops_to_analyze.items():
+        current_population = population_list[population_index]
+        # Save fitness and population members
+        np.savetxt(output_path + 'Fitness_' + population_name + '.dat', fitness_list[population_index])
+        np.savetxt(output_path + 'Population_' + population_name + '.dat', population_list[population_index])
+        # Current generation's dictionary
+        generation_output = dict()
+        # Loop over all individuals of the populations
+        for individual in range(population_size):
+            # Retrieve orbital parameters
+            current_orbit_parameters = current_population[individual]
+            # Propagate orbit and compute fitness
+            orbitProblem.fitness(current_orbit_parameters)
+            # Retrieve state and dependent variable history
+            current_states = orbitProblem.get_last_run_dynamics_simulator().state_history
+            current_dependent_variables = orbitProblem.get_last_run_dynamics_simulator().dependent_variable_history
+            # Save results to dict
+            generation_output[individual] = [current_states, current_dependent_variables]
+            # Write data to files
+            save2txt(current_dependent_variables,
+                     population_name + '_dependent_variables' + str(individual) + '.dat',
+                     output_path)
+            save2txt(current_states,
+                     population_name + '_states' + str(individual) + '.dat',
+                     output_path)
+        # Append to global dictionary
+        simulation_output[population_index] = [generation_output,
+                                               fitness_list[population_index],
+                                               population_list[population_index]]
 
-        # Retrieve orbital parameters
-        current_orbit_parameters = initial_population[i]
-        # Propagate orbit and compute fitness
-        orbitProblem.fitness(current_orbit_parameters)
-        # Retrieve state and dependent variable history
-        current_states = orbitProblem.get_last_run_dynamics_simulator().state_history
-        current_dependent_variables = orbitProblem.get_last_run_dynamics_simulator().dependent_variable_history
-        # Write data to files
-        save2txt(current_dependent_variables, 'initial_dependent_variables' + str(i) + '.dat', output_path)
-        save2txt(current_states, 'initial_states' + str(i) + '.dat', output_path)
+    ###########################################################################
+    # ANALYZE RESULTS #########################################################
+    ###########################################################################
 
-    # Save first generation data
-    np.savetxt(output_path + 'Fitness_0.dat', fitness_list[0])
-    np.savetxt(output_path + 'Population_0.dat', population_list[0])
-    # Save last generation data
-    np.savetxt(output_path + 'Fitness_final.dat', fitness_list[-1])
-    np.savetxt(output_path + 'Population_final.dat', population_list[-1])
+    # Set font size for plots
+    font = {'size': 12}
+    matplotlib.rc('font', **font)
 
-    # ###########################################################################
-    # # MONTE-CARLO SEARCH ######################################################
-    # ###########################################################################
-    #
-    # # Retrieve lower and upper boundaries of the problem
-    # problem_bounds = orbitProblem.get_bounds()
-    # # Fix seed for reproducibility
-    # np.random.seed(0)
-    # # Initialize counter
-    # counter = 1
-    # # Perform a Monte-Carlo search
-    # for iteration in range(1000):
-    #     # Generate random values for the design variables
-    #     semi_major_axis = np.random.uniform(problem_bounds[0][0], problem_bounds[1][0])
-    #     eccentricity = np.random.uniform(problem_bounds[0][2], problem_bounds[1][1])
-    #     inclination = np.random.uniform(problem_bounds[0][2], problem_bounds[1][2])
-    #     node = np.random.uniform(problem_bounds[0][3], problem_bounds[1][3])
-    #     # Compute fitness and propagate orbit
-    #     current_fitness = orbitProblem.fitness([semi_major_axis, eccentricity, inclination, node])
-    #     # If the propagation does not stop prematurely, extract and save data
-    #     if np.max(current_fitness) < 1.0E4:
-    #         # Retrieves state and dependent variable history
-    #         dynamics_simulator = orbitProblem.get_last_run_dynamics_simulator()
-    #         states = dynamics_simulator.state_history
-    #         dependent_variables = dynamics_simulator.dependent_variable_history
-    #
-    #         # Saves data to the ./SimulationOutput
-    #         output_path = os.path.dirname(__file__) + '/SimulationOutput'
-    #         save2txt(dependent_variables, 'dependent_variables' + str(counter) + '.dat', output_path)
-    #         save2txt(states, 'states' + str(counter) + '.dat', output_path)
-    #         counter += 1
+    # Create label dictionary
+    labels = {0: 'Semi-major axis [m]',
+              1: 'Eccentricity',
+              2: 'Inclination [deg]',
+              3: 'Longitude of the node [deg]'}
+    # Loop over populations
+    for population_index in simulation_output.keys():
+        # Retrieve current population
+        current_generation = simulation_output[population_index]
+        # Plot Pareto fronts for all design variables
+        fig, axs = plt.subplots(2, 2, figsize=(14, 8))
+        fig.suptitle('Generation ' + str(population_index), fontweight='bold')
+        current_fitness = current_generation[1]
+        current_population = current_generation[2]
+        for ax_index, ax in enumerate(axs.flatten()):
+            cs = ax.scatter(np.deg2rad(current_fitness[:, 0]),
+                            current_fitness[:, 1],
+                            40,
+                            current_population[:, ax_index],
+                            marker='.')
+            cbar = fig.colorbar(cs, ax=ax)
+            cbar.ax.set_ylabel(labels[ax_index])
+            ax.grid('major')
+            if ax_index > 1:
+                ax.set_xlabel('Objective 1: coverage [deg] ')
+            if ax_index == 0 or ax_index == 2:
+                ax.set_ylabel('Objective 2: proximity [m]')
+
+    # Plot histogram for last generation, semi-major axis
+    fig, axs = plt.subplots(2, 2, figsize=(12, 8))
+    fig.suptitle('Final orbits by decision variable', fontweight='bold')
+    last_pop = simulation_output[number_of_evolutions - 1][2]
+    for ax_index, ax in enumerate(axs.flatten()):
+        ax.hist(last_pop[:, ax_index], bins=30)
+        ax.set_xlabel(labels[ax_index])
+        if ax_index % 2 == 0:
+            ax.set_ylabel('Occurrences in the population')
+
+    # Plot orbits of initial and final generation
+    fig = plt.figure(figsize=(12, 6))
+    fig.suptitle('Initial and final orbit bundle', fontweight='bold')
+    # Loop over populations
+    for ax_index, population_index in enumerate(simulation_output.keys()):
+        current_ax = fig.add_subplot(1, 2, 1 + ax_index, projection='3d')
+        # Retrieve current population
+        current_generation = simulation_output[population_index]
+        # Plot Pareto fronts for all design variables
+        current_population = current_generation[2]
+        # Loop over individuals
+        for ind_index, individual in enumerate(current_population):
+            # Plot orbit
+            state_history = list(current_generation[0][ind_index][0].values())
+            state_history = np.vstack(state_history)
+            current_ax.plot(state_history[:, 0],
+                            state_history[:, 1],
+                            state_history[:, 2],
+                            linewidth=0.5)
+        # Prettify
+        current_ax.set_xlabel('X [m]')
+        current_ax.set_ylabel('Y [m]')
+        current_ax.set_zlabel('Z [m]')
+
+    # Plot orbits of final generation divided by parameters
+    fig = plt.figure(figsize=(12, 8))
+    fig.suptitle('Final orbit bundle by decision variable', fontweight='bold')
+    # Retrieve current population
+    current_generation = simulation_output[number_of_evolutions - 1]
+    # Plot Pareto fronts for all design variables
+    current_population = current_generation[2]
+    # Loop over decision variables
+    decision_variable_range = {0: [800.0, 1300.0],
+                               1: [0.10, 0.17],
+                               2: [90.0, 95.0],
+                               3: [250.0, 270.0]}
+    decision_variable_names = {0: r'$a$',
+                               1: r'$e$',
+                               2: r'$i$',
+                               3: r'$\Omega$'}
+    decision_variable_units = {0: r' m',
+                               1: r' ',
+                               2: r' deg',
+                               3: r' deg'}
+    for var in range(4):
+        # Create axis
+        current_ax = fig.add_subplot(2, 2, 1 + var, projection='3d')
+        # Loop over individuals
+        for ind_index, individual in enumerate(current_population):
+            # Set plot color according to boundaries
+            if individual[var] < decision_variable_range[var][0]:
+                plt_color = 'r'
+                label = decision_variable_names[var] + ' < ' + str(decision_variable_range[var][0]) + \
+                        decision_variable_units[var]
+            elif individual[var] > decision_variable_range[var][0] and individual[var] < decision_variable_range[
+                var][1]:
+                plt_color = 'b'
+                label = str(decision_variable_range[var][0]) + decision_variable_units[var] + ' < ' + \
+                        decision_variable_names[var] + \
+                         ' < ' + str(decision_variable_range[var][1]) + decision_variable_units[var]
+            else:
+                plt_color = 'g'
+                label = decision_variable_names[var] + ' > ' + str(decision_variable_range[var][1]) + decision_variable_units[var]
+
+            # Plot orbit
+            state_history = list(current_generation[0][ind_index][0].values())
+            state_history = np.vstack(state_history)
+            current_ax.plot(state_history[:, 0],
+                            state_history[:, 1],
+                            state_history[:, 2],
+                            color=plt_color,
+                            linewidth=0.5,
+                            label=label)
+        # Prettify
+        current_ax.set_xlabel('X [m]')
+        current_ax.set_ylabel('Y [m]')
+        current_ax.set_zlabel('Z [m]')
+        handles, labels = current_ax.get_legend_handles_labels()
+        labels, ids = np.unique(labels, return_index=True)
+        handles = [handles[i] for i in ids]
+        current_ax.legend(handles, labels, loc='upper right')
+
+    # Show plot
+    plt.show()
 
 
 if __name__ == "__main__":
