@@ -559,7 +559,7 @@ def main():
 
     DYNAMICAL MODEL
     Itokawa spherical harmonics, cannonball radiation pressure from Sun, point-mass third-body
-    from Sun, Jupiter, Saturn
+    from Sun, Jupiter, Saturn, Earth, Mars
 
     PROPAGATION TIME
     5 days
@@ -568,15 +568,15 @@ def main():
     RKF7(8) with tolerances 1E-8
 
     TERMINATION CONDITIONS
-    In addition to 5 day time, minimum distance from center of body: 150 m (no crashing),
-    maximum distance from center of body: 5 km (no escaping)
+    In addition to 5 day time, minimum distance from Itokaw's center of mass: 150 m (no crashing),
+    maximum distance from center of mass: 5 km (no escaping)
 
     DESIGN VARIABLES
-    Initial semi-major axis, eccentricity, inclination, and longitude of node
+    Initial values of semi-major axis, eccentricity, inclination, and longitude of node
 
     OBJECTIVES
-    1. good coverage, this is now quantified by maximizing the mean value of the absolute longitude w.r.t. Itokawa
-    over the full propagation;
+    1. good coverage: the mean value of the absolute longitude w.r.t. Itokawa over the full propagation should be
+       maximized;
     2. close orbit: the mean value of the distance should be minimized.
     """
     ###########################################################################
@@ -644,6 +644,8 @@ def main():
     # OPTIMIZE ORBIT WITH PYGMO ###############################################
     ###########################################################################
 
+    # Fix seed for reproducibility
+    fixed_seed = 17031861
     # Instantiate orbit problem
     orbitProblem = AsteroidOrbitProblem(bodies,
                                         integrator_settings,
@@ -654,12 +656,12 @@ def main():
                                         design_variable_ub)
 
     # Select Moead algorithm from pygmo, with one generation
-    algo = pg.algorithm(pg.nsga2(gen=1))
+    algo = pg.algorithm(pg.nsga2(gen=1, seed=fixed_seed))
     # Create pygmo problem using the UDP instantiated above
     prob = pg.problem(orbitProblem)
     # Initialize pygmo population with 48 individuals
     population_size = 48
-    pop = pg.population(prob, size=population_size)
+    pop = pg.population(prob, size=population_size, seed=fixed_seed)
     # Set the number of evolutions
     number_of_evolutions = 50
     # Initialize containers
@@ -678,6 +680,8 @@ def main():
     # ANALYZE FIRST AND LAST GENERATIONS ######################################
     ###########################################################################
 
+    dump_results_to_file = False
+
     # Get output path
     output_path = os.getcwd() + '/PygmoExampleSimulationOutput/'
 
@@ -690,8 +694,12 @@ def main():
     for population_index, population_name in pops_to_analyze.items():
         current_population = population_list[population_index]
         # Save fitness and population members
-        np.savetxt(output_path + 'Fitness_' + population_name + '.dat', fitness_list[population_index])
-        np.savetxt(output_path + 'Population_' + population_name + '.dat', population_list[population_index])
+        if dump_results_to_file:
+            # Create directory
+            if not os.path.isdir(output_path):
+                os.mkdir(output_path)
+            np.savetxt(output_path + 'Fitness_' + population_name + '.dat', fitness_list[population_index])
+            np.savetxt(output_path + 'Population_' + population_name + '.dat', population_list[population_index])
         # Current generation's dictionary
         generation_output = dict()
         # Loop over all individuals of the populations
@@ -706,12 +714,13 @@ def main():
             # Save results to dict
             generation_output[individual] = [current_states, current_dependent_variables]
             # Write data to files
-            save2txt(current_dependent_variables,
-                     population_name + '_dependent_variables' + str(individual) + '.dat',
-                     output_path)
-            save2txt(current_states,
-                     population_name + '_states' + str(individual) + '.dat',
-                     output_path)
+            if dump_results_to_file:
+                save2txt(current_dependent_variables,
+                         population_name + '_dependent_variables' + str(individual) + '.dat',
+                         output_path)
+                save2txt(current_states,
+                         population_name + '_states' + str(individual) + '.dat',
+                         output_path)
         # Append to global dictionary
         simulation_output[population_index] = [generation_output,
                                                fitness_list[population_index],
@@ -725,18 +734,30 @@ def main():
     font = {'size': 12}
     matplotlib.rc('font', **font)
 
-    # Create label dictionary
-    labels = {0: 'Semi-major axis [m]',
-              1: 'Eccentricity',
-              2: 'Inclination [deg]',
-              3: 'Longitude of the node [deg]'}
+    # Create dictionaries
+    decision_variable_names = {0: 'Semi-major axis [m]',
+                               1: 'Eccentricity',
+                               2: 'Inclination [deg]',
+                               3: 'Longitude of the node [deg]'}
+    decision_variable_range = {0: [800.0, 1300.0],
+                               1: [0.10, 0.17],
+                               2: [90.0, 95.0],
+                               3: [250.0, 270.0]}
+    decision_variable_symbols = {0: r'$a$',
+                                 1: r'$e$',
+                                 2: r'$i$',
+                                 3: r'$\Omega$'}
+    decision_variable_units = {0: r' m',
+                               1: r' ',
+                               2: r' deg',
+                               3: r' deg'}
     # Loop over populations
     for population_index in simulation_output.keys():
         # Retrieve current population
         current_generation = simulation_output[population_index]
         # Plot Pareto fronts for all design variables
         fig, axs = plt.subplots(2, 2, figsize=(14, 8))
-        fig.suptitle('Generation ' + str(population_index), fontweight='bold')
+        fig.suptitle('Generation ' + str(population_index), fontweight='bold', y=0.95)
         current_fitness = current_generation[1]
         current_population = current_generation[2]
         for ax_index, ax in enumerate(axs.flatten()):
@@ -746,32 +767,38 @@ def main():
                             current_population[:, ax_index],
                             marker='.')
             cbar = fig.colorbar(cs, ax=ax)
-            cbar.ax.set_ylabel(labels[ax_index])
+            cbar.ax.set_ylabel(decision_variable_names[ax_index])
             ax.grid('major')
             if ax_index > 1:
-                ax.set_xlabel('Objective 1: coverage [deg] ')
+                ax.set_xlabel(r'Objective 1: coverage [$deg^{-1}$] ')
             if ax_index == 0 or ax_index == 2:
-                ax.set_ylabel('Objective 2: proximity [m]')
+                ax.set_ylabel(r'Objective 2: proximity [$m$]')
+        # Save figure
+        fig.savefig('pareto_generation_' + str(population_index) + '.png', bbox_inches='tight')
 
     # Plot histogram for last generation, semi-major axis
     fig, axs = plt.subplots(2, 2, figsize=(12, 8))
-    fig.suptitle('Final orbits by decision variable', fontweight='bold')
+    fig.suptitle('Final orbits by decision variable', fontweight='bold', y=0.95)
     last_pop = simulation_output[number_of_evolutions - 1][2]
     for ax_index, ax in enumerate(axs.flatten()):
         ax.hist(last_pop[:, ax_index], bins=30)
-        ax.set_xlabel(labels[ax_index])
+        # Prettify
+        ax.set_xlabel(decision_variable_names[ax_index])
         if ax_index % 2 == 0:
             ax.set_ylabel('Occurrences in the population')
+    # Save figure
+    fig.savefig('histograms_final_generation.png', bbox_inches='tight')
 
     # Plot orbits of initial and final generation
     fig = plt.figure(figsize=(12, 6))
-    fig.suptitle('Initial and final orbit bundle', fontweight='bold')
+    fig.suptitle('Initial and final orbit bundle', fontweight='bold', y=0.95)
+    title = {0: 'Initial orbit bundle',
+             1: 'Final orbit bundle'}
     # Loop over populations
     for ax_index, population_index in enumerate(simulation_output.keys()):
         current_ax = fig.add_subplot(1, 2, 1 + ax_index, projection='3d')
         # Retrieve current population
         current_generation = simulation_output[population_index]
-        # Plot Pareto fronts for all design variables
         current_population = current_generation[2]
         # Loop over individuals
         for ind_index, individual in enumerate(current_population):
@@ -786,27 +813,18 @@ def main():
         current_ax.set_xlabel('X [m]')
         current_ax.set_ylabel('Y [m]')
         current_ax.set_zlabel('Z [m]')
+        current_ax.set_title(title[ax_index], y=1.0, pad=15)
+    # Save figure
+    fig.savefig('orbit_bundles_initial_final_gen.png', bbox_inches='tight')
 
     # Plot orbits of final generation divided by parameters
     fig = plt.figure(figsize=(12, 8))
-    fig.suptitle('Final orbit bundle by decision variable', fontweight='bold')
+    fig.suptitle('Final orbit bundle by decision variable', fontweight='bold', y=0.95)
     # Retrieve current population
     current_generation = simulation_output[number_of_evolutions - 1]
     # Plot Pareto fronts for all design variables
     current_population = current_generation[2]
     # Loop over decision variables
-    decision_variable_range = {0: [800.0, 1300.0],
-                               1: [0.10, 0.17],
-                               2: [90.0, 95.0],
-                               3: [250.0, 270.0]}
-    decision_variable_names = {0: r'$a$',
-                               1: r'$e$',
-                               2: r'$i$',
-                               3: r'$\Omega$'}
-    decision_variable_units = {0: r' m',
-                               1: r' ',
-                               2: r' deg',
-                               3: r' deg'}
     for var in range(4):
         # Create axis
         current_ax = fig.add_subplot(2, 2, 1 + var, projection='3d')
@@ -815,17 +833,17 @@ def main():
             # Set plot color according to boundaries
             if individual[var] < decision_variable_range[var][0]:
                 plt_color = 'r'
-                label = decision_variable_names[var] + ' < ' + str(decision_variable_range[var][0]) + \
+                label = decision_variable_symbols[var] + ' < ' + str(decision_variable_range[var][0]) + \
                         decision_variable_units[var]
-            elif individual[var] > decision_variable_range[var][0] and individual[var] < decision_variable_range[
-                var][1]:
+            elif decision_variable_range[var][0] < individual[var] < decision_variable_range[var][1]:
                 plt_color = 'b'
-                label = str(decision_variable_range[var][0]) + decision_variable_units[var] + ' < ' + \
-                        decision_variable_names[var] + \
-                         ' < ' + str(decision_variable_range[var][1]) + decision_variable_units[var]
+                label = str(decision_variable_range[var][0]) + ' < ' + \
+                        decision_variable_symbols[var] + \
+                        ' < ' + str(decision_variable_range[var][1]) + decision_variable_units[var]
             else:
                 plt_color = 'g'
-                label = decision_variable_names[var] + ' > ' + str(decision_variable_range[var][1]) + decision_variable_units[var]
+                label = decision_variable_symbols[var] + ' > ' + str(decision_variable_range[var][1]) + \
+                        decision_variable_units[var]
 
             # Plot orbit
             state_history = list(current_generation[0][ind_index][0].values())
@@ -840,10 +858,13 @@ def main():
         current_ax.set_xlabel('X [m]')
         current_ax.set_ylabel('Y [m]')
         current_ax.set_zlabel('Z [m]')
-        handles, labels = current_ax.get_legend_handles_labels()
-        labels, ids = np.unique(labels, return_index=True)
+        current_ax.set_title(decision_variable_names[var], y=1.0, pad=10)
+        handles, decision_variable_legend = current_ax.get_legend_handles_labels()
+        decision_variable_legend, ids = np.unique(decision_variable_legend, return_index=True)
         handles = [handles[i] for i in ids]
-        current_ax.legend(handles, labels, loc='upper right')
+        current_ax.legend(handles, decision_variable_legend, loc='lower right', bbox_to_anchor=(0.3, 0.6))
+    # Save figure
+    fig.savefig('orbit_bundle_final_gen_by_variable.png', bbox_inches='tight')
 
     # Show plot
     plt.show()
